@@ -1,0 +1,27 @@
+[package]
+name = "firesale"
+version = "0.1.0"
+authors = ["Haze Booth <isnt@haze.cool>"]
+edition = "2018"
+
+[lib]
+name = "libfiresale"
+path = "src/lib.rs"
+
+[[bin]]
+name = "firesale"
+path = "src/main.rs"
+
+[dependencies]
+goauth = "0.4.0"
+smpl_jwt = "^0.3"
+structopt = "0.2.15"
+reqwest = "0.9.17"
+serde = "1.0.91"
+serde_derive = "1.0.91"
+anymap = "0.12.1"
+json = "0.11.13"
+
+[dependencies.chrono]
+version = "0.4.6"
+features = [ "serde" ]
