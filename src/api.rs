@@ -1,216 +1,162 @@
-
-use chrono::DateTime;
 use chrono::Utc;
-use std::path::{Path, PathBuf};
-use smpl_jwt::Jwt;
+use chrono::{Date, DateTime};
 use goauth::auth::JwtClaims;
 use goauth::scopes::Scope;
-use anymap::AnyMap;
-use std::collections::HashMap;
-use json::{JsonValue, JsonError};
 use goauth::scopes::Scope::Firebase;
+use serde::Deserializer;
+use smpl_jwt::Jwt;
+use std::collections::HashMap;
 use std::convert::TryFrom;
+use std::path::{Path, PathBuf};
 
-const FIRESTORE_BASE_URL: &'static str = "https://firestore.googleapis.com/v1";
-const TOKEN_URL: &'static str = "";
+mod errors {
+    // To be used when a request fails, formatted with the request error
+    pub fn http_error(err: reqwest::Error) -> String {
+        format!("Failed to get response from firestore: {}", err.to_string())
+    }
 
-// the `fields` attribute for Firestore Documents
-pub type FirestoreFields = HashMap<String, FirestoreType>;
+    // To be used when the json decoding of a request fails, formatted with the decoding error
+    pub fn json_decode_error(err: reqwest::Error) -> String {
+        format!("Failed to decode JSON: {}", err.to_string())
+    }
 
-// A Firestore document
-#[derive(Debug)]
-pub struct Document {
-    pub name: String,
-    pub create_time: DateTime<Utc>,
-    pub update_time: DateTime<Utc>,
-    pub fields: FirestoreFields,
-}
-
-#[derive(Deserialize, Debug)]
-struct PartialDocument {
-    pub name: String,
-    pub create_time: DateTime<Utc>,
-    pub update_time: DateTime<Utc>,
-}
-
-impl PartialDocument {
-    fn assemble(&self, fields: FirestoreFields) -> Document {
-        let name = self.name.clone(); // FIXME(hazebooth): clones are bad :(
-        let create_time = self.create_time.clone();
-        let update_time = self.update_time.clone();
-        Document {
-            name, create_time, update_time, fields,
-        }
+    // To be used when the json encoding of a request fails, formatted with the decoding error
+    pub fn json_encode_error(err: serde_json::Error) -> String {
+        format!("Failed to encode JSON: {}", err.to_string())
     }
 }
 
-// Represents a contextualized instance for database handling
+const FIRESTORE_BASE_URL: &'static str = "https://firestore.googleapis.com/v1";
+const FIRESTORE_BETA_BASE_URL: &'static str = " https://firestore.googleapis.com/v1beta1";
+
+//// the `fields` attribute for Firestore Documents
+#[derive(Debug, Deserialize)]
+pub struct FirestoreFields(HashMap<String, FirestoreType>);
+
+#[derive(Debug, Deserialize)]
+struct Map {
+    fields: FirestoreFields,
+}
+
+#[derive(Debug, Deserialize)]
+struct Array {
+    values: Vec<FirestoreType>,
+}
+
 #[derive(Debug)]
 pub struct DatabaseContext {
     pub project_id: String,
-    auth_token: goauth::auth::Token
+    auth_token: goauth::auth::Token,
+    client: reqwest::Client,
 }
 
 // Firestore GeoPoint type
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Deserialize, Clone, Copy)]
 struct GeoPoint {
     latitude: i32,
     longitude: i32,
 }
 
+use serde_aux::field_attributes::deserialize_number_from_string;
+
 // Represents a mapping between Firestore data types and Rust types
-#[derive(Debug)]
+#[derive(Debug, Deserialize)]
 enum FirestoreType {
+    #[serde(rename = "integerValue")]
+    #[serde(deserialize_with = "deserialize_number_from_string")]
     Integer(i32),
+    #[serde(rename = "booleanValue")]
     Boolean(bool),
+    #[serde(rename = "stringValue")]
     String(String),
+    #[serde(rename = "geoPointValue")]
     GeoLocation(GeoPoint),
-    Array(Vec<FirestoreType>),
-    Map(FirestoreFields),
+    #[serde(rename = "arrayValue")]
+    Array(Array),
+    #[serde(rename = "mapValue")]
+    Map(Map),
+    #[serde(rename = "timestampValue")]
     Timestamp(DateTime<Utc>),
-    Null
+    #[serde(rename = "nullValue")]
+    Null,
 }
 
-impl FirestoreType {
-    fn extract_integer(value: &JsonValue) -> Result<i32, String> {
-        let value_str = value["integerValue"].as_str()
-            .ok_or_else(|| String::from("No string value found"))?.to_string();
-        value_str.parse::<i32>()
-            .map_err(|_| String::from("Failed to parse string value to integer"))
-    }
-
-    fn extract_boolean(value: &JsonValue) -> Result<bool, String> {
-        value["booleanValue"].as_bool()
-            .ok_or_else(|| String::from("Found no boolean value"))
-    }
-
-    fn extract_geopoint(value: &JsonValue) -> Result<GeoPoint, String> {
-        let latitude = value["geoPointValue"]["latitude"].as_i32()
-            .ok_or_else(|| String::from("Failed to parse latitude"))?;
-        let longitude = value["geoPointValue"]["longitude"].as_i32()
-            .ok_or_else(|| String::from("Failed to parse longitude"))?;
-        Ok(GeoPoint{
-            latitude, longitude
-        })
-    }
-
-    fn extract_string(value: &JsonValue) -> Result<String, String> {
-        value["stringValue"].as_str()
-            .ok_or_else(|| String::from("Failed to get stringValue string"))
-            .map(String::from)
-    }
-
-    fn extract_timestamp(value: &JsonValue) -> Result<DateTime<Utc>, String> {
-        let timestamp_str = value["timestampValue"].as_str()
-            .ok_or_else(|| String::from("Failed to get timestamp string"))?;
-        timestamp_str.parse::<DateTime<Utc>>()
-            .map_err(|e| format!("Failed to parse timestamp: {}", e))
-    }
-
-    fn extract_array(value: &JsonValue) -> Result<Vec<FirestoreType>, String> {
-        let values = &value["arrayValue"]["values"];
-        let array_len = values.len();
-        let mut firestore_values = Vec::with_capacity(array_len);
-        for item in values.members() {
-            firestore_values.push(FirestoreType::try_from(item)?);
-        }
-        Ok(firestore_values)
-    }
-
-    fn extract_map(value: &JsonValue) -> Result<FirestoreFields, String> {
-        let mut fields = FirestoreFields::new();
-        let map_value = &value["mapValue"]["fields"];
-        for (key, entry ) in map_value.entries() {
-            let parsed_value = FirestoreType::try_from(entry)?;
-            fields.insert(key.to_string(), parsed_value);
-        }
-        Ok(fields)
-    }
-
+#[derive(Debug, Deserialize)]
+pub struct Document {
+    name: String,
+    fields: FirestoreFields,
+    #[serde(rename = "createTime")]
+    create_time: DateTime<Utc>,
+    #[serde(rename = "updateTime")]
+    update_time: DateTime<Utc>,
 }
 
-impl TryFrom<&JsonValue> for FirestoreType {
-    type Error = String;
+#[derive(Serialize)]
+pub struct DocumentMask {
+    #[serde(rename = "fieldPaths")]
+    field_paths: Vec<String>,
+}
 
-    fn try_from(value: &JsonValue) -> Result<Self, Self::Error> {
-        if is_integer(value) {
-            let value = FirestoreType::extract_integer(value)?;
-            return Ok(FirestoreType::Integer(value))
-        } else if is_string(value) {
-            let value = FirestoreType::extract_string(value)?;
-            return Ok(FirestoreType::String(value))
-        } else if is_boolean(value) {
-            let value = FirestoreType::extract_boolean(value)?;
-            return Ok(FirestoreType::Boolean(value))
-        } else if is_null(value) {
-            return Ok(FirestoreType::Null)
-        } else if is_geopoint(value) {
-            let value = FirestoreType::extract_geopoint(value)?;
-            return Ok(FirestoreType::GeoLocation(value))
-        } else if is_timestamp(value) {
-            let value = FirestoreType::extract_timestamp(value)?;
-            return Ok(FirestoreType::Timestamp(value))
-        } else if is_array(value) {
-            let values = FirestoreType::extract_array(value)?;
-            return Ok(FirestoreType::Array(values))
-        } else if is_map(value) {
-            let values = FirestoreType::extract_map(value)?;
-            return Ok(FirestoreType::Map(values))
-        }
-        Err("No value found".to_string())
+#[derive(Serialize)]
+pub enum ConsistencySelector {
+    Transaction(String),
+    #[serde(rename = "readTime")]
+    ReadTime(DateTime<Utc>),
+}
+
+pub mod list_documents {
+    #[derive(Serialize)]
+    pub struct Request {
+        #[serde(rename = "pageSize")]
+        pub page_size: i32,
+        #[serde(rename = "orderBy")]
+        pub order_by: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub mask: Option<super::DocumentMask>,
+        #[serde(rename = "showMissing")]
+        pub show_missing: bool,
+        pub consistency_selector: super::ConsistencySelector,
+    }
+
+    #[derive(Debug, Deserialize)]
+    pub struct Response {
+        documents: Vec<super::Document>,
+        #[serde(rename = "nextPageToken")]
+        next_page_token: String,
     }
 }
 
-fn is_integer(value: &JsonValue) -> bool {
-    value.has_key("integerValue")
-}
-
-fn is_boolean(value: &JsonValue) -> bool {
-    value.has_key("booleanValue")
-}
-
-fn is_null(value: &JsonValue) -> bool {
-    value.has_key("nullValue")
-}
-
-fn is_geopoint(value: &JsonValue) -> bool {
-    value.has_key("geoPointValue")
-}
-
-fn is_timestamp(value: &JsonValue) -> bool {
-    value.has_key("timestampValue")
-}
-
-fn is_string(value: &JsonValue) -> bool {
-    value.has_key("stringValue")
-}
-
-fn is_map(value: &JsonValue) -> bool {
-    value.has_key("mapValue")
-}
-
-fn is_array(value: &JsonValue) -> bool {
-    value.has_key("arrayValue")
-}
-
-
-fn get_firestore_fields(fields: &json::JsonValue)
--> Result<FirestoreFields, String> {
-    let mut field_map = FirestoreFields::new();
-    if fields.is_object() {
-        for (name, field) in fields.entries() {
-            let fsv = FirestoreType::try_from(field)?;
-            field_map.insert(name.to_string(), fsv);
-        }
+pub mod batch_get {
+    #[derive(Serialize)]
+    pub struct Request {
+        documents: Vec<String>,
     }
-    Ok(field_map)
+
+    #[derive(Deserialize)]
+    pub struct Response {
+        transaction: String,
+        read_time: String,
+        found: Option<super::Document>,
+        missing: Option<String>,
+    }
 }
 
 impl DatabaseContext {
+    fn auth_header_map(&self) -> Result<reqwest::header::HeaderMap, String> {
+        let mut map = reqwest::header::HeaderMap::new();
+        let str = &*self.auth_token.access_token();
+        map.insert(
+            reqwest::header::AUTHORIZATION,
+            str.parse().map_err(|_| "Invalid Header Value")?,
+        );
+        Ok(map)
+    }
 
     // Create a new instance that uses project_id as anchoring context
-    pub fn new<S>(project_id: S, service_account_path: S)
-        -> Result<DatabaseContext, String> where S: Into<String> {
+    pub fn new<S>(project_id: S, service_account_path: S) -> Result<DatabaseContext, String>
+    where
+        S: Into<String>,
+    {
         // ensure String types
         let project_id = project_id.into();
         let service_account_path = service_account_path.into();
@@ -218,50 +164,180 @@ impl DatabaseContext {
         // get jwt & credentials from file
         let credentials = goauth::credentials::Credentials::from_file(&*service_account_path)
             .map_err(|_| "Failed to load credentials from file")?;
-        let claims = JwtClaims::new(credentials.iss(),
-        &Scope::DataStore, credentials.token_uri(), None, None);
-        let jwt = Jwt::new(claims, credentials.rsa_key()
-            .map_err(|_| "Failed to get RSA private key from credentials")?, None);
+        let claims = JwtClaims::new(
+            credentials.iss(),
+            &Scope::DataStore,
+            credentials.token_uri(),
+            None,
+            None,
+        );
+        let jwt = Jwt::new(
+            claims,
+            credentials
+                .rsa_key()
+                .map_err(|_| "Failed to get RSA private key from credentials")?,
+            None,
+        );
         // cool, we have a token
-        let auth_token = goauth::get_token_with_creds(
-            &jwt, &credentials
-        ).map_err(|_| "Failed to authenticate")?;
+        let auth_token = goauth::get_token_with_creds(&jwt, &credentials)
+            .map_err(|_| "Failed to authenticate")?;
+        let client = reqwest::Client::new();
         // return success
-        Ok(DatabaseContext{
-            project_id, auth_token
+        Ok(DatabaseContext {
+            client,
+            project_id,
+            auth_token,
         })
     }
 
-    // Creates a proper URL for the Firestore REST api
-    fn make_document_url(&self,
-                         collection_name: String, document_id: String) -> String {
-        format!("{}/projects/{}/databases/(default)/documents/{}/{}", FIRESTORE_BASE_URL,
-                self.project_id, collection_name, document_id)
-        // TODO(hazebooth): Optimize out of format!
+    fn make_api_base(&self) -> String {
+        format!("{}/projects/{}", FIRESTORE_BASE_URL, self.project_id)
     }
 
-    // TODO(hazebooth): support document masks
-    pub fn get_document<S: Into<String>>(&self, collection_name: S, document_id: S)
-                           -> Result<(), String> where S: Into<String> {
+    // Creates a proper URL for the Firestore REST api
+    fn make_document_url(&self, collection_name: String, document_id: String) -> String {
+        format!(
+            "{}/databases/(default)/documents/{}{}",
+            self.make_api_base(),
+            collection_name,
+            document_id
+        )
+    }
+
+    fn make_batch_get_url(&self, database_name: String) -> String {
+        format!(
+            "{}/{{database={}}}/documents:batchGet",
+            FIRESTORE_BETA_BASE_URL,
+            format!("projects/{}/databases/{}", self.project_id, database_name)
+        )
+    }
+
+    // Deletes a document from said collection
+
+    pub fn delete_document<S>(&self, collection_name: S, document_id: S) -> Result<Document, String>
+    where
+        S: Into<String>,
+    {
         // ensure String types
         let collection_name = collection_name.into();
         let document_id = document_id.into();
 
         let document_ref_url = self.make_document_url(collection_name, document_id);
-        dbg!(&document_ref_url);
-        let client = reqwest::Client::new();
-        let mut response =  client.get(&*document_ref_url)
-            .header(reqwest::header::AUTHORIZATION, &*self.get_authorization_key())
-            .send().map_err(|_| "Failed to get response from Google")?;
-        let response_text = response.text().map_err(|_| "Failed to get response text")?;
-        println!("{}", response_text);
-        let parsed_json = json::parse(&*response_text)
-            .map_err(|_| "Failed to parse request json (text)")?;
-        let fields = &parsed_json["fields"];
-        let fields = get_firestore_fields(fields)?;
-//        let assembled_doc = partial_doc.assemble(fields);
-//        Ok(assembled_doc)
-        Ok(())
+        self.delete_document_at_path(&*document_ref_url)
+    }
+
+    // TODO(hazebooth): support document masks
+    // GETs a document from said collection
+    // https://firebase.google.com/docs/firestore/reference/rest/v1beta1/projects.databases.documents/get
+    pub fn get_document<S>(&self, collection_name: S, document_id: S) -> Result<Document, String>
+    where
+        S: Into<String>,
+    {
+        // ensure String types
+        let collection_name = collection_name.into();
+        let document_id = document_id.into();
+
+        let document_ref_url = self.make_document_url(collection_name, document_id);
+        self.retrieve_document(&*document_ref_url)
+    }
+
+    // Inner implementation of `delete_document`
+    fn delete_document_at_path(&self, path: &str) -> Result<Document, String> {
+        let mut response = self
+            .client
+            .delete(path)
+            .headers(self.auth_header_map()?)
+            .send()
+            .map_err(errors::http_error)?;
+        let document = response
+            .json::<Document>()
+            .map_err(errors::json_decode_error)?;
+        Ok(document)
+    }
+
+    // Inner implementation of `get_document`.
+    fn retrieve_document(&self, path: &str) -> Result<Document, String> {
+        let mut response = self
+            .client
+            .get(path)
+            .headers(self.auth_header_map()?)
+            .send()
+            .map_err(errors::http_error)?;
+        let document = response
+            .json::<Document>()
+            .map_err(errors::json_decode_error)?;
+        Ok(document)
+    }
+
+    // Internal for batch_get_documents
+    // https://firebase.google.com/docs/firestore/reference/rest/v1beta1/projects.databases.documents/batchGet#google.firestore.v1beta1.Firestore.BatchGetDocuments
+    fn batch_get(&self, documents: Vec<String>, path: &str) -> Result<batch_get::Response, String> {
+        let mut response = self
+            .client
+            .post(path)
+            .headers(self.auth_header_map()?)
+            .send()
+            .map_err(errors::http_error)?;
+        response
+            .json::<batch_get::Response>()
+            .map_err(errors::json_decode_error)
+    }
+
+    pub fn batch_get_documents<S>(
+        &self,
+        documents: Vec<S>,
+        database_name: S,
+    ) -> Result<batch_get::Response, String>
+    where
+        S: Into<String>,
+    {
+        let documents = documents
+            .into_iter()
+            .map(|s| s.into())
+            .collect::<Vec<String>>();
+        let database_name: String = database_name.into();
+        self.batch_get(documents, &*self.make_batch_get_url(database_name))
+    }
+
+    // want https://firestore.googleapis.com/v1beta1/{parent=projects/*/databases/*/documents/*/**}/{collectionId}
+    // ours https://firestore.googleapis.com/v1beta1/{parent=projects/hazes-test-project/databases/default/documents/*/**}/cars
+    fn make_list_documents_url(&self, database_name: &str, collection_name: &str) -> String {
+        let parent = format!("projects/{}/databases/{}", self.project_id, database_name);
+        format!(
+            "{}/{{parent={}}}/{}",
+            FIRESTORE_BETA_BASE_URL, parent, collection_name
+        )
+    }
+
+    pub fn list_documents(
+        &self,
+        page_size: i32,
+        order_by: String,
+        mask: Option<DocumentMask>,
+        show_missing: bool,
+        consistency_selector: ConsistencySelector,
+        database_name: &str,
+        collection_name: &str,
+    ) -> Result<list_documents::Response, String> {
+        let request = list_documents::Request {
+            page_size,
+            order_by,
+            mask,
+            show_missing,
+            consistency_selector,
+        };
+        let request_json = serde_json::to_string(&request).map_err(errors::json_encode_error)?;
+        println!("{}", &*self.make_list_documents_url(database_name, collection_name));
+        let mut response = self
+            .client
+            .get(&*self.make_list_documents_url(database_name, collection_name))
+            .headers(self.auth_header_map()?)
+            .body(request_json)
+            .send()
+            .map_err(errors::http_error)?;
+        response
+            .json::<list_documents::Response>()
+            .map_err(errors::json_decode_error)
     }
 
     // Used to give us the key for our Authorization Header

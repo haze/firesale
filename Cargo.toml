@@ -19,8 +19,11 @@ structopt = "0.2.15"
 reqwest = "0.9.17"
 serde = "1.0.91"
 serde_derive = "1.0.91"
-anymap = "0.12.1"
-json = "0.11.13"
+serde_json = "1.0.39"
+serde-aux = "0.6.1"
+
+[dependencies.clap]
+version = "2.33.0"
 
 [dependencies.chrono]
 version = "0.4.6"
