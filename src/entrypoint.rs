@@ -17,6 +17,13 @@ pub fn handle_document_delete(
     Ok(())
 }
 
+pub fn handle_collection_delete(
+    query: crate::CollectionQuery,
+    ctx: crate::DatabaseContext,
+) -> Result<(), String> {
+
+}
+
 pub fn handle_document_view(
     query: crate::CollectionQuery,
     ctx: crate::DatabaseContext,

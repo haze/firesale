@@ -49,6 +49,7 @@ enum EntryPoint {
     GetDocument(DocumentQuery),
     ViewCollection(CollectionQuery),
     DeleteDocument(DocumentQuery),
+    DeleteCollection(CollectionQuery),
     Usage(String),
 }
 
@@ -112,6 +113,13 @@ fn setup_arguments(environ: &Environment) -> (Options, EntryPoint) {
             return (options, EntryPoint::ViewCollection(query));
         }
     } else if let Some(delete_command) = &matches.subcommand_matches(DELETE_SUB_COMMAND) {
+        if delete_command.is_present(DOCUMENT_NAME) {
+            let query = DocumentQuery::from_sub_matches(delete_command);
+            return (options, EntryPoint::DeleteDocument(query));
+        } else {
+            let query = CollectionQuery::from_sub_matches(delete_command);
+            return (options, EntryPoint::DeleteCollection(query));
+        }
         let query = DocumentQuery::from_sub_matches(delete_command);
         return (options, EntryPoint::DeleteDocument(query));
     }
@@ -158,6 +166,10 @@ fn main() -> Result<(), String> {
         EntryPoint::GetDocument(query) => entrypoint::handle_document_get(query, context),
         EntryPoint::ViewCollection(query) => entrypoint::handle_document_view(query, context),
         EntryPoint::DeleteDocument(query) => entrypoint::handle_document_delete(query, context),
-        _ => Ok(()),
+        EntryPoint::DeleteCollection(query) => entrypoint::handle_collection_delete(query, context),
+        _ => {
+            println!("entrypoint not implemented");
+            Ok(())
+        }
     }
 }

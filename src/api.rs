@@ -327,7 +327,10 @@ impl DatabaseContext {
             consistency_selector,
         };
         let request_json = serde_json::to_string(&request).map_err(errors::json_encode_error)?;
-        println!("{}", &*self.make_list_documents_url(database_name, collection_name));
+        println!(
+            "{}",
+            &*self.make_list_documents_url(database_name, collection_name)
+        );
         let mut response = self
             .client
             .get(&*self.make_list_documents_url(database_name, collection_name))
