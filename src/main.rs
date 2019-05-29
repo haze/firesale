@@ -27,48 +27,65 @@ fn gather_environment() -> Environment {
     };
 }
 
-// Used to represent root level applications options
+/// Used to represent root level applications options
 #[derive(Debug)]
 struct Options {
     environment: Environment, // cli-defined environment
+    database_name: String,
 }
 
-// This represents a query for a certain document
+/// This represents a query for a certain document
 pub struct DocumentQuery {
     collection_name: String,
     document_name: String,
 }
 
-// This represents a query to view an entire collection
+/// This represents a query to view an entire collection
 pub struct CollectionQuery {
     collection_name: String,
 }
 
-// Numerous fronts for the entrypoint of a program after CLI parsing
+/// This represents a query to export a collection or collections
+/// to a specified bucket name
+pub struct ExportCollectionQuery {
+    collections: Vec<String>,
+    bucket_name: String,
+}
+
+/// Numerous fronts for the entrypoint of a program after CLI parsing
 enum EntryPoint {
     GetDocument(DocumentQuery),
     ViewCollection(CollectionQuery),
     DeleteDocument(DocumentQuery),
     DeleteCollection(CollectionQuery),
+    ExportCollection(ExportCollectionQuery),
     Usage(String),
 }
 
-// root meta
+// Root meta information
 const APP_NAME: &'static str = "firesale";
 const APP_VERSION: &'static str = "0.1";
 const APP_AUTHOR: &'static str = "Haze Booth <isnt@haze.cool>";
 const ABOUT_APP: &'static str = "CLI Firestore Interface";
 
-// application config
+// Application config
 const CREDENTIALS_LOCATION_ARG: &'static str = "credentials";
 const PROJECT_ID_ARG: &'static str = "project_id";
 
-// subcommands
+// Subcommands
 const GET_SUB_COMMAND: &'static str = "get";
 const DELETE_SUB_COMMAND: &'static str = "delete";
+const EXPORT_SUB_COMMAND: &'static str = "export";
+
+const DATABASE_NAME: &'static str = "database";
+const DEFAULT_DATABASE_NAME: &'static str = "(default)";
+
+const COLLECTIONS: &'static str = "collections";
+const BUCKET_NAME: &'static str = "bucket";
 
 const COLLECTION_NAME: &'static str = "collection";
 const COLLECTION_NAME_SHORT: &'static str = "c";
+
 const DOCUMENT_NAME: &'static str = "document";
 const DOCUMENT_NAME_SHORT: &'static str = "d";
 
@@ -93,6 +110,16 @@ fn setup_arguments(environ: &Environment) -> (Options, EntryPoint) {
                 .arg(Arg::with_name(COLLECTION_NAME).required(true))
                 .arg(Arg::with_name(DOCUMENT_NAME)),
         )
+        .subcommand(
+            SubCommand::with_name(EXPORT_SUB_COMMAND)
+                .arg(Arg::with_name(BUCKET_NAME).required(true))
+                .arg(Arg::with_name(COLLECTIONS).multiple(true)),
+        )
+        .arg(
+            Arg::with_name(DATABASE_NAME)
+                .required(true)
+                .default_value(DEFAULT_DATABASE_NAME),
+        )
         .get_matches();
     let environment = {
         // TODO(hazebooth): investigate
@@ -103,7 +130,11 @@ fn setup_arguments(environ: &Environment) -> (Options, EntryPoint) {
             project_id,
         }
     };
-    let options = Options { environment };
+    let database_name = matches.value_of(DATABASE_NAME).unwrap();
+    let options = Options {
+        environment,
+        database_name,
+    };
     if let Some(get_command) = &matches.subcommand_matches(GET_SUB_COMMAND) {
         if get_command.is_present(DOCUMENT_NAME) {
             let query = DocumentQuery::from_sub_matches(get_command);
@@ -122,8 +153,22 @@ fn setup_arguments(environ: &Environment) -> (Options, EntryPoint) {
         }
         let query = DocumentQuery::from_sub_matches(delete_command);
         return (options, EntryPoint::DeleteDocument(query));
+    } else if let Some(export_command) = &matches.subcommand_matches(EXPORT_SUB_COMMAND) {
+        let query = ExportCollectionQuery::from_sub_matches(export_command);
+        return (options, EntryPoint::ExportCollection(query));
     }
     return (options, EntryPoint::Usage(matches.usage().to_string()));
+}
+
+impl ExportCollectionQuery {
+    fn from_sub_matches(matches: &&ArgMatches) -> ExportCollectionQuery {
+        ExportCollectionQuery {
+            collections: matches
+                .values_of_lossy(COLLECTIONS)
+                .unwrap_or_else(|| Vec::new()),
+            bucket_name: matches.value_of(BUCKET_NAME).unwrap().to_string(),
+        }
+    }
 }
 
 impl DocumentQuery {
@@ -167,6 +212,8 @@ fn main() -> Result<(), String> {
         EntryPoint::ViewCollection(query) => entrypoint::handle_document_view(query, context),
         EntryPoint::DeleteDocument(query) => entrypoint::handle_document_delete(query, context),
         EntryPoint::DeleteCollection(query) => entrypoint::handle_collection_delete(query, context),
+        EntryPoint::ExportCollection(query) => entrypoint::handle_database_export(query, context),
+        EntryPoint::Usage(usage_str) => Ok(println!("{}", usage_str)),
         _ => {
             println!("entrypoint not implemented");
             Ok(())

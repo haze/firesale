@@ -1,3 +1,4 @@
+use super::firestore;
 use chrono::Utc;
 use chrono::{Date, DateTime};
 use goauth::auth::JwtClaims;
@@ -8,23 +9,6 @@ use smpl_jwt::Jwt;
 use std::collections::HashMap;
 use std::convert::TryFrom;
 use std::path::{Path, PathBuf};
-
-mod errors {
-    // To be used when a request fails, formatted with the request error
-    pub fn http_error(err: reqwest::Error) -> String {
-        format!("Failed to get response from firestore: {}", err.to_string())
-    }
-
-    // To be used when the json decoding of a request fails, formatted with the decoding error
-    pub fn json_decode_error(err: reqwest::Error) -> String {
-        format!("Failed to decode JSON: {}", err.to_string())
-    }
-
-    // To be used when the json encoding of a request fails, formatted with the decoding error
-    pub fn json_encode_error(err: serde_json::Error) -> String {
-        format!("Failed to encode JSON: {}", err.to_string())
-    }
-}
 
 const FIRESTORE_BASE_URL: &'static str = "https://firestore.googleapis.com/v1";
 const FIRESTORE_BETA_BASE_URL: &'static str = " https://firestore.googleapis.com/v1beta1";
@@ -142,6 +126,7 @@ pub mod batch_get {
 }
 
 impl DatabaseContext {
+    /// Creates a header map with proper authorization
     fn auth_header_map(&self) -> Result<reqwest::header::HeaderMap, String> {
         let mut map = reqwest::header::HeaderMap::new();
         let str = &*self.auth_token.access_token();
@@ -152,7 +137,7 @@ impl DatabaseContext {
         Ok(map)
     }
 
-    // Create a new instance that uses project_id as anchoring context
+    /// Create a new instance that uses project_id as anchoring context
     pub fn new<S>(project_id: S, service_account_path: S) -> Result<DatabaseContext, String>
     where
         S: Into<String>,
@@ -190,157 +175,161 @@ impl DatabaseContext {
         })
     }
 
-    fn make_api_base(&self) -> String {
-        format!("{}/projects/{}", FIRESTORE_BASE_URL, self.project_id)
-    }
+    //    fn make_api_base(&self) -> String {
+    //        format!("{}/projects/{}", FIRESTORE_BASE_URL, self.project_id)
+    //    }
+    //
+    //    // Creates a proper URL for the Firestore REST api
+    //    fn make_document_url(&self, collection_name: String, document_id: String) -> String {
+    //        format!(
+    //            "{}/databases/(default)/documents/{}{}",
+    //            self.make_api_base(),
+    //            collection_name,
+    //            document_id
+    //        )
+    //    }
+    //
+    //    fn make_batch_get_url(&self, database_name: String) -> String {
+    //        format!(
+    //            "{}/{{database={}}}/documents:batchGet",
+    //            FIRESTORE_BETA_BASE_URL,
+    //            format!("projects/{}/databases/{}", self.project_id, database_name)
+    //        )
+    //    }
+    //
+    //    // Deletes a document from said collection
+    //
+    //    pub fn delete_document<S>(&self, collection_name: S, document_id: S) -> Result<Document, String>
+    //    where
+    //        S: Into<String>,
+    //    {
+    //        // ensure String types
+    //        let collection_name = collection_name.into();
+    //        let document_id = document_id.into();
+    //
+    //        let document_ref_url = self.make_document_url(collection_name, document_id);
+    //        self.delete_document_at_path(&*document_ref_url)
+    //    }
+    //
+    //    // TODO(hazebooth): support document masks
+    //    // GETs a document from said collection
+    //    // https://firebase.google.com/docs/firestore/reference/rest/v1beta1/projects.databases.documents/get
+    //    pub fn get_document<S>(&self, collection_name: S, document_id: S) -> Result<Document, String>
+    //    where
+    //        S: Into<String>,
+    //    {
+    //        // ensure String types
+    //        let collection_name = collection_name.into();
+    //        let document_id = document_id.into();
+    //
+    //        let document_ref_url = self.make_document_url(collection_name, document_id);
+    //        self.retrieve_document(&*document_ref_url)
+    //    }
+    //
+    //    // Inner implementation of `delete_document`
+    //    fn delete_document_at_path(&self, path: &str) -> Result<Document, String> {
+    //        let mut response = self
+    //            .client
+    //            .delete(path)
+    //            .headers(self.auth_header_map()?)
+    //            .send()
+    //            .map_err(errors::http_error)?;
+    //        let document = response
+    //            .json::<Document>()
+    //            .map_err(errors::json_decode_error)?;
+    //        Ok(document)
+    //    }
+    //
+    //    // Inner implementation of `get_document`.
+    //    fn retrieve_document(&self, path: &str) -> Result<Document, String> {
+    //        let mut response = self
+    //            .client
+    //            .get(path)
+    //            .headers(self.auth_header_map()?)
+    //            .send()
+    //            .map_err(errors::http_error)?;
+    //        let document = response
+    //            .json::<Document>()
+    //            .map_err(errors::json_decode_error)?;
+    //        Ok(document)
+    //    }
+    //
+    //    // Internal for batch_get_documents
+    //    // https://firebase.google.com/docs/firestore/reference/rest/v1beta1/projects.databases.documents/batchGet#google.firestore.v1beta1.Firestore.BatchGetDocuments
+    //    fn batch_get(&self, documents: Vec<String>, path: &str) -> Result<batch_get::Response, String> {
+    //        let mut response = self
+    //            .client
+    //            .post(path)
+    //            .headers(self.auth_header_map()?)
+    //            .send()
+    //            .map_err(errors::http_error)?;
+    //        response
+    //            .json::<batch_get::Response>()
+    //            .map_err(errors::json_decode_error)
+    //    }
+    //
+    //    pub fn batch_get_documents<S>(
+    //        &self,
+    //        documents: Vec<S>,
+    //        database_name: S,
+    //    ) -> Result<batch_get::Response, String>
+    //    where
+    //        S: Into<String>,
+    //    {
+    //        let documents = documents
+    //            .into_iter()
+    //            .map(|s| s.into())
+    //            .collect::<Vec<String>>();
+    //        let database_name: String = database_name.into();
+    //        self.batch_get(documents, &*self.make_batch_get_url(database_name))
+    //    }
+    //
+    //    // want https://firestore.googleapis.com/v1beta1/{parent=projects/*/databases/*/documents/*/**}/{collectionId}
+    //    // ours https://firestore.googleapis.com/v1beta1/{parent=projects/hazes-test-project/databases/default/documents/*/**}/cars
+    //    fn make_list_documents_url(&self, database_name: &str, collection_name: &str) -> String {
+    //        let parent = format!("projects/{}/databases/{}", self.project_id, database_name);
+    //        format!(
+    //            "{}/{{parent={}}}/{}",
+    //            FIRESTORE_BETA_BASE_URL, parent, collection_name
+    //        )
+    //    }
+    //
+    //    pub fn list_documents(
+    //        &self,
+    //        page_size: i32,
+    //        order_by: String,
+    //        mask: Option<DocumentMask>,
+    //        show_missing: bool,
+    //        consistency_selector: ConsistencySelector,
+    //        database_name: &str,
+    //        collection_name: &str,
+    //    ) -> Result<list_documents::Response, String> {
+    //        let request = list_documents::Request {
+    //            page_size,
+    //            order_by,
+    //            mask,
+    //            show_missing,
+    //            consistency_selector,
+    //        };
+    //        let request_json = serde_json::to_string(&request).map_err(errors::json_encode_error)?;
+    //        println!(
+    //            "{}",
+    //            &*self.make_list_documents_url(database_name, collection_name)
+    //        );
+    //        let mut response = self
+    //            .client
+    //            .get(&*self.make_list_documents_url(database_name, collection_name))
+    //            .headers(self.auth_header_map()?)
+    //            .body(request_json)
+    //            .send()
+    //            .map_err(errors::http_error)?;
+    //        response
+    //            .json::<list_documents::Response>()
+    //            .map_err(errors::json_decode_error)
+    //    }
 
-    // Creates a proper URL for the Firestore REST api
-    fn make_document_url(&self, collection_name: String, document_id: String) -> String {
-        format!(
-            "{}/databases/(default)/documents/{}{}",
-            self.make_api_base(),
-            collection_name,
-            document_id
-        )
-    }
-
-    fn make_batch_get_url(&self, database_name: String) -> String {
-        format!(
-            "{}/{{database={}}}/documents:batchGet",
-            FIRESTORE_BETA_BASE_URL,
-            format!("projects/{}/databases/{}", self.project_id, database_name)
-        )
-    }
-
-    // Deletes a document from said collection
-
-    pub fn delete_document<S>(&self, collection_name: S, document_id: S) -> Result<Document, String>
-    where
-        S: Into<String>,
-    {
-        // ensure String types
-        let collection_name = collection_name.into();
-        let document_id = document_id.into();
-
-        let document_ref_url = self.make_document_url(collection_name, document_id);
-        self.delete_document_at_path(&*document_ref_url)
-    }
-
-    // TODO(hazebooth): support document masks
-    // GETs a document from said collection
-    // https://firebase.google.com/docs/firestore/reference/rest/v1beta1/projects.databases.documents/get
-    pub fn get_document<S>(&self, collection_name: S, document_id: S) -> Result<Document, String>
-    where
-        S: Into<String>,
-    {
-        // ensure String types
-        let collection_name = collection_name.into();
-        let document_id = document_id.into();
-
-        let document_ref_url = self.make_document_url(collection_name, document_id);
-        self.retrieve_document(&*document_ref_url)
-    }
-
-    // Inner implementation of `delete_document`
-    fn delete_document_at_path(&self, path: &str) -> Result<Document, String> {
-        let mut response = self
-            .client
-            .delete(path)
-            .headers(self.auth_header_map()?)
-            .send()
-            .map_err(errors::http_error)?;
-        let document = response
-            .json::<Document>()
-            .map_err(errors::json_decode_error)?;
-        Ok(document)
-    }
-
-    // Inner implementation of `get_document`.
-    fn retrieve_document(&self, path: &str) -> Result<Document, String> {
-        let mut response = self
-            .client
-            .get(path)
-            .headers(self.auth_header_map()?)
-            .send()
-            .map_err(errors::http_error)?;
-        let document = response
-            .json::<Document>()
-            .map_err(errors::json_decode_error)?;
-        Ok(document)
-    }
-
-    // Internal for batch_get_documents
-    // https://firebase.google.com/docs/firestore/reference/rest/v1beta1/projects.databases.documents/batchGet#google.firestore.v1beta1.Firestore.BatchGetDocuments
-    fn batch_get(&self, documents: Vec<String>, path: &str) -> Result<batch_get::Response, String> {
-        let mut response = self
-            .client
-            .post(path)
-            .headers(self.auth_header_map()?)
-            .send()
-            .map_err(errors::http_error)?;
-        response
-            .json::<batch_get::Response>()
-            .map_err(errors::json_decode_error)
-    }
-
-    pub fn batch_get_documents<S>(
-        &self,
-        documents: Vec<S>,
-        database_name: S,
-    ) -> Result<batch_get::Response, String>
-    where
-        S: Into<String>,
-    {
-        let documents = documents
-            .into_iter()
-            .map(|s| s.into())
-            .collect::<Vec<String>>();
-        let database_name: String = database_name.into();
-        self.batch_get(documents, &*self.make_batch_get_url(database_name))
-    }
-
-    // want https://firestore.googleapis.com/v1beta1/{parent=projects/*/databases/*/documents/*/**}/{collectionId}
-    // ours https://firestore.googleapis.com/v1beta1/{parent=projects/hazes-test-project/databases/default/documents/*/**}/cars
-    fn make_list_documents_url(&self, database_name: &str, collection_name: &str) -> String {
-        let parent = format!("projects/{}/databases/{}", self.project_id, database_name);
-        format!(
-            "{}/{{parent={}}}/{}",
-            FIRESTORE_BETA_BASE_URL, parent, collection_name
-        )
-    }
-
-    pub fn list_documents(
-        &self,
-        page_size: i32,
-        order_by: String,
-        mask: Option<DocumentMask>,
-        show_missing: bool,
-        consistency_selector: ConsistencySelector,
-        database_name: &str,
-        collection_name: &str,
-    ) -> Result<list_documents::Response, String> {
-        let request = list_documents::Request {
-            page_size,
-            order_by,
-            mask,
-            show_missing,
-            consistency_selector,
-        };
-        let request_json = serde_json::to_string(&request).map_err(errors::json_encode_error)?;
-        println!(
-            "{}",
-            &*self.make_list_documents_url(database_name, collection_name)
-        );
-        let mut response = self
-            .client
-            .get(&*self.make_list_documents_url(database_name, collection_name))
-            .headers(self.auth_header_map()?)
-            .body(request_json)
-            .send()
-            .map_err(errors::http_error)?;
-        response
-            .json::<list_documents::Response>()
-            .map_err(errors::json_decode_error)
+    pub fn export_database(&self, query: firestore::databases::ExportDocumentQuery) {
+        firestore::databases::export_documents(self.client, self.auth_header_map())
     }
 
     // Used to give us the key for our Authorization Header

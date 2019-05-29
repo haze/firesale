@@ -1,68 +1,33 @@
-use failure::Fail;
+use reqwest::Error as ReqwestError;
+use serde_json::Error as SerdeError;
 
-// Errors defined here are used when the library fails
-pub mod processing {
-    #[derive(Debug, Fail)]
-    enum Error {
-        #[fail(display = "Dummy Error")]
-        Dummy, //TODO(hazebooth): remove
+/// General purpose error describing multiple fault points
+/// in either firestore or processing of firestore responses
+#[derive(Debug, Snafu)]
+pub enum Error {
+    #[snafu(display("Network Error: {}", source))]
+    Network { source: ReqwestError },
+
+    #[snafu(display("JSON Encode/Decode Error: {}", source))]
+    JSON { source: ReqwestError },
+
+    #[snafu(display("Unknown Error from reqwest: {}", source))]
+    UnknownReqwest { source: ReqwestError },
+}
+
+impl From<ReqwestError> for Error {
+    fn from(source: ReqwestError) -> Self {
+        if source.is_serialization() {
+            return Error::JSON { source };
+        } else if source.is_server_error()
+            || source.is_client_error()
+            || source.is_http()
+            || source.is_redirect()
+        {
+            return Error::Network { source };
+        }
+        Error::UnknownReqwest { source }
     }
 }
 
-// Errors defined here are to be used for when some sort of
-// parsing fails on on our
-pub mod parsing {
-    use reqwest::Error as ReqwestError;
-    use serde_json::error::Error as SerdeError;
-    use std::error::Error as StdError;
-
-    type StandardError = StdError + Send + Sync;
-
-    #[derive(Debug, Fail)]
-    pub enum Error {
-        #[fail(display = "JSON Encoding/Decoding failed: {}", inner)]
-        Serde { inner: SerdeError },
-        #[fail(display = "Unknown error: {}", inner)]
-        Unknown { inner: ReqwestError },
-    }
-
-    impl From<ReqwestError> for Error {
-        fn from(inner: ReqwestError) -> Self {
-            let is_serde = inner.is_serialization();
-            match inner.get_ref() {
-                None => return Error::Unknown { inner },
-                Some(err) => {
-                    if is_serde {
-                        return Error::Serde {
-                            inner: SerdeError::from(err),
-                        };
-                    }
-                    return Error::Unknown { inner };
-                }
-            }
-        }
-    }
-
-    impl From<SerdeError> for Error {
-        fn from(inner: SerdeError) -> Self {
-            Error::Serde { inner }
-        }
-    }
-}
-
-// External errors defined here are to represent remote
-// errors
-pub mod api {
-    use reqwest::Error as ReqwestError;
-    #[derive(Debug, Fail)]
-    pub enum Error {
-        #[fail(display = "Network request failed: {}", inner)]
-        NetworkError { inner: ReqwestError },
-    }
-
-    impl From<ReqwestError> for Error {
-        fn from(inner: ReqwestError) -> Self {
-            Error::NetworkError { inner }
-        }
-    }
-}
+pub type Result<T, E = Error> = std::result::Result<T, E>;

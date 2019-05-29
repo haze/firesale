@@ -1,8 +1,8 @@
 #[macro_use]
 extern crate serde_derive;
 #[macro_use]
-extern crate failure;
+extern crate snafu_derive;
 
 pub mod api;
-mod errors;
-mod firestore;
+pub mod errors;
+pub mod firestore;
