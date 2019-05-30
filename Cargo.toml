@@ -1,0 +1,19 @@
+[package]
+name = "firesale"
+version = "0.1.0"
+authors = ["Haze Booth <isnt@haze.cool>"]
+edition = "2018"
+
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "firesale"
+path = "src/main.rs"
+
+[dependencies]
+serde = "1.0.91"
+serde_derive = "1.0.91"
+serde_json = "1.0.39"
+reqwest = "0.9.17"
+
